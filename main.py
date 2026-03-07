@@ -1,7 +1,8 @@
 import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QSlider, QLabel, QRadioButton, QButtonGroup, QMessageBox, QTreeWidget, QTreeWidgetItem, QFileDialog)
+                             QHBoxLayout, QPushButton, QSlider, QLabel, QRadioButton, QButtonGroup, 
+                             QMessageBox, QTreeWidget, QTreeWidgetItem, QFileDialog, QStackedWidget, QGridLayout)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import Qt, QUrl
@@ -9,29 +10,67 @@ from PyQt6.QtGui import QFont, QColor, QBrush
 
 from dvr_scanner import DVRScanner
 
+class VideoGridItem(QWidget):
+    """A single quadrant in the 2x2 grid with a label."""
+    def __init__(self, label_text):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        self.video_widget = QVideoWidget()
+        layout.addWidget(self.video_widget)
+        
+        # Floating label
+        self.label = QLabel(label_text, self.video_widget)
+        self.label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 0, 0, 150);
+                color: white;
+                padding: 4px 8px;
+                border-bottom-right-radius: 4px;
+                font-weight: bold;
+            }
+        """)
+        self.label.move(0, 0)
+        self.label.show()
+
 class DVRPlayer(QMainWindow):
     def __init__(self, directory_path=None):
         super().__init__()
         self.setWindowTitle("DVR Video Player")
-        self.setGeometry(100, 100, 1024, 768)
+        self.setGeometry(100, 100, 1280, 800)
 
         # Video Data
         self.video_groups = []
         self.current_group_index = 0
-        self.current_angle = 'F'  # Default angle
+        self.current_angle = 'F'  # Default angle ('F', 'B', 'L', 'R', 'S', or 'ALL')
         
-        # Audio/Video Players
+        # --- Primary Player (Single View) ---
         self.media_player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.media_player.setAudioOutput(self.audio_output)
-        
         self.video_widget = QVideoWidget()
         self.media_player.setVideoOutput(self.video_widget)
+        
+        # --- Multi Players (All View: S, B, L, R) ---
+        self.multi_players = []
+        self.multi_widgets = []
+        self.multi_angles = ['S', 'B', 'L', 'R']
+        
+        for angle in self.multi_angles:
+            player = QMediaPlayer()
+            # Only the first player in multi-view gets audio to avoid echo, 
+            # or we could mute all. Let's mute all for now to be safe.
+            audio = QAudioOutput()
+            audio.setMuted(True)
+            player.setAudioOutput(audio)
+            self.multi_players.append(player)
 
         # Setup UI
         self.init_ui()
         
-        # Connect signals
+        # Connect signals for primary player
         self.media_player.mediaStatusChanged.connect(self.handle_media_status)
         self.media_player.positionChanged.connect(self.update_slider_position)
         self.media_player.durationChanged.connect(self.update_slider_duration)
@@ -75,8 +114,29 @@ class DVRPlayer(QMainWindow):
         top_bar_layout.addStretch(1)
         left_layout.addLayout(top_bar_layout)
 
-        # 1. Video Display
-        left_layout.addWidget(self.video_widget, stretch=1)
+        # 1. Video Display (Stacked: Single vs Grid)
+        self.display_stack = QStackedWidget()
+        
+        # Single view
+        self.display_stack.addWidget(self.video_widget)
+        
+        # Grid view (2x2)
+        grid_widget = QWidget()
+        self.grid_layout = QGridLayout(grid_widget)
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.grid_layout.setSpacing(2)
+        
+        # S (Front Wide), B (Back)
+        # L (Left), R (Right)
+        angle_names = {'S': 'Front Wide', 'B': 'Back', 'L': 'Left', 'R': 'Right'}
+        for i, angle in enumerate(self.multi_angles):
+            item = VideoGridItem(angle_names[angle])
+            self.multi_players[i].setVideoOutput(item.video_widget)
+            self.multi_widgets.append(item)
+            self.grid_layout.addWidget(item, i // 2, i % 2)
+            
+        self.display_stack.addWidget(grid_widget)
+        left_layout.addWidget(self.display_stack, stretch=1)
 
         # 2. Timeline and Time Label
         timeline_layout = QHBoxLayout()
@@ -109,7 +169,14 @@ class DVRPlayer(QMainWindow):
 
         # Angle Selection
         self.angle_group = QButtonGroup(self)
-        angles = [('F', "Front (F)"), ('B', "Back (B)"), ('L', "Left (L)"), ('R', "Right (R)"), ('S', "Surround/Side (S)")]
+        angles = [
+            ('F', "Front (F)"), 
+            ('B', "Back (B)"), 
+            ('L', "Left (L)"), 
+            ('R', "Right (R)"), 
+            ('S', "Front Wide (S)"),
+            ('ALL', "All Views (4-Grid)")
+        ]
         
         angle_label = QLabel("View Angle:")
         controls_layout.addWidget(angle_label)
@@ -159,16 +226,6 @@ class DVRPlayer(QMainWindow):
             QTreeWidget::branch {
                 background-color: #1e1e2e;
             }
-            QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {
-                image: none;
-                border-image: none;
-            }
-            QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {
-                image: none;
-                border-image: none;
-            }
         """)
         main_h_layout.addWidget(self.playlist_widget)
 
@@ -197,11 +254,7 @@ class DVRPlayer(QMainWindow):
         date_node = None
         all_angles = ['F', 'B', 'L', 'R', 'S']
         angle_colors = {
-            'F': '#a6e3a1',  # green
-            'B': '#f38ba8',  # red
-            'L': '#89b4fa',  # blue
-            'R': '#fab387',  # peach
-            'S': '#cba6f7',  # mauve
+            'F': '#a6e3a1', 'B': '#f38ba8', 'L': '#89b4fa', 'R': '#fab387', 'S': '#cba6f7'
         }
         dim_color = '#45475a'
 
@@ -211,7 +264,6 @@ class DVRPlayer(QMainWindow):
             time_str = dt.strftime("%H:%M:%S")
             available = set(group['angles'].keys())
 
-            # Add date parent node if new day
             if date_str != current_date:
                 current_date = date_str
                 date_node = QTreeWidgetItem(self.playlist_widget)
@@ -221,38 +273,28 @@ class DVRPlayer(QMainWindow):
                 bold_font.setPointSize(13)
                 date_node.setFont(0, bold_font)
                 date_node.setForeground(0, QBrush(QColor('#cdd6f4')))
-                date_node.setFlags(Qt.ItemFlag.ItemIsEnabled)  # not selectable
+                date_node.setFlags(Qt.ItemFlag.ItemIsEnabled)
 
-            # Build angle display string
             angle_parts = []
             for a in all_angles:
-                if a in available:
-                    angle_parts.append(a)
-                else:
-                    angle_parts.append('·')
+                angle_parts.append(a if a in available else '·')
             angles_display = '  '.join(angle_parts)
 
-            # Child node for each time group
             child = QTreeWidgetItem(date_node)
             child.setText(0, f"  {time_str}    {angles_display}")
             child.setData(0, Qt.ItemDataRole.UserRole, i)
 
-            # Color the available angle letters in the tooltip
             tooltip_lines = []
+            names = {'F': 'Front', 'B': 'Back', 'L': 'Left', 'R': 'Right', 'S': 'Front Wide'}
             for a in all_angles:
-                color = angle_colors[a] if a in available else dim_color
                 status = '●' if a in available else '○'
-                names = {'F': 'Front', 'B': 'Back', 'L': 'Left', 'R': 'Right', 'S': 'Surround'}
                 tooltip_lines.append(f"{status} {names[a]} ({a})")
             child.setToolTip(0, '\n'.join(tooltip_lines))
 
-        # Expand all date nodes by default
         self.playlist_widget.expandAll()
             
     def jump_to_video(self, item):
-        # Only respond to child nodes (time entries), not date parent nodes
-        if item.parent() is None:
-            return
+        if item.parent() is None: return
         index = item.data(0, Qt.ItemDataRole.UserRole)
         if index is not None:
             self.current_group_index = index
@@ -273,70 +315,99 @@ class DVRPlayer(QMainWindow):
 
     def set_position(self, position):
         self.media_player.setPosition(position)
+        if self.current_angle == 'ALL':
+            for p in self.multi_players:
+                p.setPosition(position)
 
     def toggle_play(self):
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        is_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        if is_playing:
             self.media_player.pause()
+            if self.current_angle == 'ALL':
+                for p in self.multi_players: p.pause()
             self.play_btn.setText("Play")
         else:
             self.media_player.play()
+            if self.current_angle == 'ALL':
+                for p in self.multi_players: p.play()
             self.play_btn.setText("Pause")
 
     def change_angle(self, new_angle):
-        if self.current_angle == new_angle:
-            return
+        if self.current_angle == new_angle: return
             
-        # Optional: Save current playback position to resume seamlessly
         current_pos = self.media_player.position()
         was_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         
-        self.current_angle = new_angle
-        loaded = self.load_video()
+        # Stop everything first
+        self.media_player.stop()
+        for p in self.multi_players: p.stop()
         
+        self.current_angle = new_angle
+        
+        # Switch display
+        if new_angle == 'ALL':
+            self.display_stack.setCurrentIndex(1)
+        else:
+            self.display_stack.setCurrentIndex(0)
+            
+        loaded = self.load_video()
         if loaded:
-            # We must wait until media is loaded before seeking, usually done asynchronously
-            # For simplicity, we just set it here. Qt 6 usually handles basic seeks after setSource.
-            self.media_player.setPosition(current_pos)
+            self.set_position(current_pos)
             if was_playing:
                 self.media_player.play()
-
-    def get_best_angle_path(self, group):
-        angles_dict = group['angles']
-        
-        # Standard lookup
-        if self.current_angle in angles_dict:
-            return angles_dict[self.current_angle]
-            
-        # Fallback logic: If requesting F, but F is missing, try S.
-        if self.current_angle == 'F' and 'S' in angles_dict:
-            self.info_label.setText(f"[Fallback] Front missing. Showing 'S' for {group['timestamp_str']}")
-            return angles_dict['S']
-            
-        return None
+                if new_angle == 'ALL':
+                    for p in self.multi_players: p.play()
 
     def load_video(self):
         if self.current_group_index >= len(self.video_groups) or self.current_group_index < 0:
             return False
             
         group = self.video_groups[self.current_group_index]
-        video_path = self.get_best_angle_path(group)
         
-        if not video_path:
-            self.info_label.setText(f"Angle '{self.current_angle}' not found for timestamp {group['timestamp_str']}. Waiting to jump to next.")
-            # Depending on UX preference, we could auto-skip to the next group, but let's just stop here for now.
-            return False
+        if self.current_angle == 'ALL':
+            # Load all 4 angles (S, B, L, R)
+            paths = []
+            for angle in self.multi_angles:
+                path = group['angles'].get(angle)
+                paths.append(path)
             
-        self.media_player.setSource(QUrl.fromLocalFile(video_path))
-        self.info_label.setText(f"Playing: {os.path.basename(video_path)}")
-        self.media_player.play()
+            # Use Front Wide (S) as the primary for duration/position tracking
+            primary_path = group['angles'].get('S') or group['angles'].get('F')
+            if primary_path:
+                self.media_player.setSource(QUrl.fromLocalFile(primary_path))
+            
+            for i, p_path in enumerate(paths):
+                if p_path:
+                    self.multi_players[i].setSource(QUrl.fromLocalFile(p_path))
+                    self.multi_players[i].play()
+                else:
+                    self.multi_players[i].stop()
+            
+            self.media_player.play()
+            self.info_label.setText(f"Playing: All Views for {group['timestamp_str']}")
+        else:
+            # Single view
+            video_path = self.get_best_angle_path(group)
+            if not video_path:
+                self.info_label.setText(f"Angle '{self.current_angle}' not found.")
+                return False
+            self.media_player.setSource(QUrl.fromLocalFile(video_path))
+            self.media_player.play()
+            self.info_label.setText(f"Playing: {os.path.basename(video_path)}")
+            
         self.play_btn.setText("Pause")
-        
-        # Highlight in playlist
         self.sync_playlist_selection()
         return True
 
+    def get_best_angle_path(self, group):
+        angles_dict = group['angles']
+        if self.current_angle in angles_dict:
+            return angles_dict[self.current_angle]
+        if self.current_angle == 'F' and 'S' in angles_dict:
+            return angles_dict['S']
+        return None
+
     def sync_playlist_selection(self):
-        # Traverse QTreeWidget tree to find the child matching current_group_index
         for i in range(self.playlist_widget.topLevelItemCount()):
             parent = self.playlist_widget.topLevelItem(i)
             for j in range(parent.childCount()):
@@ -350,8 +421,6 @@ class DVRPlayer(QMainWindow):
         if self.current_group_index < len(self.video_groups) - 1:
             self.current_group_index += 1
             self.load_video()
-        else:
-            self.info_label.setText("Reached the end of the video list.")
 
     def play_previous_group(self):
         if self.current_group_index > 0:
@@ -359,15 +428,11 @@ class DVRPlayer(QMainWindow):
             self.load_video()
 
     def handle_media_status(self, status):
-        # Auto-play next video upon completion
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            print(f"Video ended. Moving to next group: index {self.current_group_index + 1}")
             self.play_next_group()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
     player = DVRPlayer()
     player.show()
-    
     sys.exit(app.exec())

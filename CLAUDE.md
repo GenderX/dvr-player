@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A lightweight PyQt6 desktop app for playing multi-angle dashcam/DVR footage from `NOR` directories. It groups video files by timestamp, supports 5 camera angles (F/B/L/R/S), and provides continuous playback with an interactive timeline.
+A lightweight PyQt6 desktop app for playing multi-angle dashcam/DVR footage from `NOR` directories. It groups video files by timestamp, supports 5 camera angles (F/B/L/R/S) plus a synchronized 4-camera "All" view, and provides continuous playback.
 
 ## Commands
 
@@ -29,15 +29,15 @@ pyinstaller --windowed --name="DVR_Player" main.py
 
 Two-file architecture with model-view separation:
 
-- **`dvr_scanner.py`** — `DVRScanner` class: scans a directory for files matching `NOR_YYYYMMDD_HHMMSS_[FBLRS].mp4`, groups them by timestamp into dicts with `timestamp` (datetime), `timestamp_str`, and `angles` (dict mapping angle letter to file path). Returns a chronologically sorted list.
+- **`dvr_scanner.py`** — `DVRScanner` class: scans a directory for files matching `NOR_YYYYMMDD_HHMMSS_[FBLRS].mp4`, groups them by timestamp.
 
-- **`main.py`** — `DVRPlayer(QMainWindow)`: two-panel layout (3:1 ratio). Left panel has `QVideoWidget` + playback controls + angle radio buttons. Right panel is a `QListWidget` timeline grouped by date headers. State is tracked via `current_group_index` and `current_angle`.
+- **`main.py`** — `DVRPlayer(QMainWindow)`: two-panel layout (3:1 ratio). Left panel has `QStackedWidget` for single view or a 2x2 grid (S, B, L, R) "ALL" view. Right panel is a `QTreeWidget` timeline.
 
 ### Key behaviors
-- **Angle fallback**: when Front (`F`) is missing, automatically uses Surround (`S`)
-- **Angle switching**: preserves playback position when changing angles
-- **Auto-advance**: `mediaStatusChanged` signal triggers `play_next_group()` on `EndOfMedia`
-- **macOS hidden file filtering**: skips `._` prefixed files during scan
+- **All View**: Plays Front Wide (S), Back (B), Left (L), and Right (R) in a 2x2 grid, synchronized.
+- **Angle fallback**: when Front (`F`) is missing, automatically uses Front Wide (`S`).
+- **Angle switching**: preserves playback position when changing angles.
+- **Auto-advance**: `mediaStatusChanged` signal triggers `play_next_group()` on `EndOfMedia`.
 
 ## Author
 
