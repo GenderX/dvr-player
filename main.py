@@ -1,10 +1,11 @@
 import sys
 import os
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QSlider, QLabel, QRadioButton, QButtonGroup, QMessageBox, QListWidget, QListWidgetItem, QFileDialog)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QSlider, QLabel, QRadioButton, QButtonGroup, QMessageBox, QTreeWidget, QTreeWidgetItem, QFileDialog)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QFont, QColor, QBrush
 
 from dvr_scanner import DVRScanner
 
@@ -129,9 +130,46 @@ class DVRPlayer(QMainWindow):
         left_layout.addWidget(self.info_label)
         
         # --- RIGHT PANEL (Timeline Playlist) ---
-        self.playlist_widget = QListWidget()
-        self.playlist_widget.setFixedWidth(250)
+        self.playlist_widget = QTreeWidget()
+        self.playlist_widget.setHeaderHidden(True)
+        self.playlist_widget.setColumnCount(1)
+        self.playlist_widget.setFixedWidth(280)
+        self.playlist_widget.setIndentation(16)
         self.playlist_widget.itemClicked.connect(self.jump_to_video)
+        self.playlist_widget.setStyleSheet("""
+            QTreeWidget {
+                background-color: #1e1e2e;
+                border: none;
+                outline: none;
+                font-size: 13px;
+                color: #cdd6f4;
+            }
+            QTreeWidget::item {
+                padding: 4px 8px;
+                border-radius: 4px;
+                margin: 1px 4px;
+            }
+            QTreeWidget::item:hover {
+                background-color: #313244;
+            }
+            QTreeWidget::item:selected {
+                background-color: #1e66f5;
+                color: #ffffff;
+            }
+            QTreeWidget::branch {
+                background-color: #1e1e2e;
+            }
+            QTreeWidget::branch:has-children:!has-siblings:closed,
+            QTreeWidget::branch:closed:has-children:has-siblings {
+                image: none;
+                border-image: none;
+            }
+            QTreeWidget::branch:open:has-children:!has-siblings,
+            QTreeWidget::branch:open:has-children:has-siblings {
+                image: none;
+                border-image: none;
+            }
+        """)
         main_h_layout.addWidget(self.playlist_widget)
 
     def open_directory_dialog(self):
@@ -156,27 +194,66 @@ class DVRPlayer(QMainWindow):
     def populate_timeline(self):
         self.playlist_widget.clear()
         current_date = ""
+        date_node = None
+        all_angles = ['F', 'B', 'L', 'R', 'S']
+        angle_colors = {
+            'F': '#a6e3a1',  # green
+            'B': '#f38ba8',  # red
+            'L': '#89b4fa',  # blue
+            'R': '#fab387',  # peach
+            'S': '#cba6f7',  # mauve
+        }
+        dim_color = '#45475a'
+
         for i, group in enumerate(self.video_groups):
             dt = group['timestamp']
             date_str = dt.strftime("%Y-%m-%d")
             time_str = dt.strftime("%H:%M:%S")
-            angles_str = ", ".join(sorted(group['angles'].keys()))
-            
-            # Add day header if a new day begins
+            available = set(group['angles'].keys())
+
+            # Add date parent node if new day
             if date_str != current_date:
                 current_date = date_str
-                header_item = QListWidgetItem(f"📅 {date_str}")
-                header_item.setBackground(Qt.GlobalColor.lightGray)
-                header_item.setFlags(Qt.ItemFlag.NoItemFlags) # Make unselectable
-                self.playlist_widget.addItem(header_item)
-                
-            # Add video clip item
-            item = QListWidgetItem(f"🕒 {time_str} | [{angles_str}]")
-            item.setData(Qt.ItemDataRole.UserRole, i) # Store the index
-            self.playlist_widget.addItem(item)
+                date_node = QTreeWidgetItem(self.playlist_widget)
+                date_node.setText(0, f"  📅  {date_str}")
+                bold_font = QFont()
+                bold_font.setBold(True)
+                bold_font.setPointSize(13)
+                date_node.setFont(0, bold_font)
+                date_node.setForeground(0, QBrush(QColor('#cdd6f4')))
+                date_node.setFlags(Qt.ItemFlag.ItemIsEnabled)  # not selectable
+
+            # Build angle display string
+            angle_parts = []
+            for a in all_angles:
+                if a in available:
+                    angle_parts.append(a)
+                else:
+                    angle_parts.append('·')
+            angles_display = '  '.join(angle_parts)
+
+            # Child node for each time group
+            child = QTreeWidgetItem(date_node)
+            child.setText(0, f"  {time_str}    {angles_display}")
+            child.setData(0, Qt.ItemDataRole.UserRole, i)
+
+            # Color the available angle letters in the tooltip
+            tooltip_lines = []
+            for a in all_angles:
+                color = angle_colors[a] if a in available else dim_color
+                status = '●' if a in available else '○'
+                names = {'F': 'Front', 'B': 'Back', 'L': 'Left', 'R': 'Right', 'S': 'Surround'}
+                tooltip_lines.append(f"{status} {names[a]} ({a})")
+            child.setToolTip(0, '\n'.join(tooltip_lines))
+
+        # Expand all date nodes by default
+        self.playlist_widget.expandAll()
             
     def jump_to_video(self, item):
-        index = item.data(Qt.ItemDataRole.UserRole)
+        # Only respond to child nodes (time entries), not date parent nodes
+        if item.parent() is None:
+            return
+        index = item.data(0, Qt.ItemDataRole.UserRole)
         if index is not None:
             self.current_group_index = index
             self.load_video()
@@ -259,13 +336,15 @@ class DVRPlayer(QMainWindow):
         return True
 
     def sync_playlist_selection(self):
-        # Find and select the item corresponding to current_group_index
-        for i in range(self.playlist_widget.count()):
-            item = self.playlist_widget.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == self.current_group_index:
-                self.playlist_widget.setCurrentItem(item)
-                self.playlist_widget.scrollToItem(item)
-                break
+        # Traverse QTreeWidget tree to find the child matching current_group_index
+        for i in range(self.playlist_widget.topLevelItemCount()):
+            parent = self.playlist_widget.topLevelItem(i)
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                if child.data(0, Qt.ItemDataRole.UserRole) == self.current_group_index:
+                    self.playlist_widget.setCurrentItem(child)
+                    self.playlist_widget.scrollToItem(child)
+                    return
 
     def play_next_group(self):
         if self.current_group_index < len(self.video_groups) - 1:
