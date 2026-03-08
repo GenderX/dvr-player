@@ -11,29 +11,30 @@ from PyQt6.QtGui import QFont, QColor, QBrush
 from dvr_scanner import DVRScanner
 
 class VideoGridItem(QWidget):
-    """A single quadrant in the 2x2 grid with a label."""
+    """A single quadrant in the 2x2 grid with a label bar above the video."""
     def __init__(self, label_text):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
-        self.video_widget = QVideoWidget()
-        layout.addWidget(self.video_widget)
-        
-        # Floating label
-        self.label = QLabel(label_text, self.video_widget)
+
+        # Label bar on top of video
+        self.label = QLabel(label_text)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setFixedHeight(24)
         self.label.setStyleSheet("""
             QLabel {
-                background-color: rgba(0, 0, 0, 150);
-                color: white;
-                padding: 4px 8px;
-                border-bottom-right-radius: 4px;
+                background-color: rgba(20, 20, 20, 220);
+                color: #ffffff;
                 font-weight: bold;
+                font-size: 13px;
+                padding: 2px 0px;
             }
         """)
-        self.label.move(0, 0)
-        self.label.show()
+        layout.addWidget(self.label)
+
+        self.video_widget = QVideoWidget()
+        layout.addWidget(self.video_widget)
 
 class DVRPlayer(QMainWindow):
     def __init__(self, directory_path=None):
@@ -128,7 +129,7 @@ class DVRPlayer(QMainWindow):
         
         # S (Front Wide), B (Back)
         # L (Left), R (Right)
-        angle_names = {'S': 'Front Wide', 'B': 'Back', 'L': 'Left', 'R': 'Right'}
+        angle_names = {'S': '前广角 (S)', 'B': '后 (B)', 'L': '左 (L)', 'R': '右 (R)'}
         for i, angle in enumerate(self.multi_angles):
             item = VideoGridItem(angle_names[angle])
             self.multi_players[i].setVideoOutput(item.video_widget)
